@@ -23,7 +23,10 @@
 
 #include "SerialSetup.h"
 #include "WinAPIException.h"
+
+#ifndef CONSOLE_ONLY
 #include "resource.h"
+#endif
 
 
 #ifdef _UNICODE
@@ -54,7 +57,7 @@ static constexpr StopBits TWO{ TWOSTOPBITS, _T("2") };
 static constexpr StopBits stopbits[] = { ONE, ONE5, TWO };
 
 
-SerialSetup::SerialSetup() : _port(),
+SerialSetup::SerialSetup() : _port("COM1"),
 							 _baud_rate(115200),
 							 _byte_size(8),
 							 _parity(const_cast<Parity&>(parities[0])), // NO__PARITY
@@ -62,7 +65,9 @@ SerialSetup::SerialSetup() : _port(),
 							 _flow_control(const_cast<FlowControl&>(flowctrls[0])), // NONE
 							 _devices()
 {
+#ifndef CONSOLE_ONLY
 	initialize();
+#endif
 }
 
 
@@ -71,6 +76,7 @@ SerialSetup::~SerialSetup()
 	// Do nothing
 }
 
+#ifndef CONSOLE_ONLY
 void SerialSetup::initialize() {
 	// Generates device map of serial interface name and device name
 	// from HKLM\HARDWARE\DEVICEMAP\SERIALCOMM.
@@ -203,7 +209,7 @@ static bool GetConfigurationFromDialog(HWND hDlg, SerialSetup* setup) {
  */
 static INT_PTR CALLBACK SettingDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
 	static SerialSetup* setup;
-	
+
 	switch (msg) {
 		case WM_INITDIALOG:
 			setup = reinterpret_cast<SerialSetup*>(lParam);
@@ -237,6 +243,7 @@ static INT_PTR CALLBACK SettingDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARA
 bool SerialSetup::ShowConfigureDialog(HINSTANCE hInst, HWND hWnd) noexcept {
 	return IDCONNECT == DialogBoxParam(hInst, MAKEINTRESOURCE(IDD_SETUP), hWnd, &SettingDlgProc, reinterpret_cast<LPARAM>(this));
 }
+#endif  /* CONSOLE_ONLY */
 
 /**
  * Parse command line arguments, and set them to this instance.

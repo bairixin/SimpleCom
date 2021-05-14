@@ -30,7 +30,22 @@ static HANDLE stdoutRedirectorThread;
 static HANDLE hSerial;
 static OVERLAPPED serialReadOverlapped = { 0 };
 static volatile bool terminated;
+static volatile bool pause = false;
+static TString Port;
 
+
+#ifdef _UNICODE
+static void ErrorMessage(HWND hwnd, LPCWSTR lpText, LPCWSTR lpCaption)
+#else
+static void ErrorMessage(HWND hwnd, LPCSTR lpText, LPCSTR lpCaption)
+#endif
+{
+#ifdef CONSOLE_ONLY
+    std::cout << lpText << std::endl;
+#else
+    MessageBox(hwnd, lpText, lpCaption, MB_OK | MB_ICONERROR);
+#endif
+}
 
 /*
  * Entry point for stdin redirector.
@@ -40,30 +55,46 @@ static void StdInRedirector(HWND parent_hwnd) {
 	HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
 	OVERLAPPED overlapped = { 0 };
 	TCHAR console_data[4];
-	char send_data[4];
+//	char send_data[4];
 	DWORD data_len;
 
 	overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	if (overlapped.hEvent == NULL) {
 		WinAPIException ex(GetLastError(), _T("SimpleCom"));
-		MessageBox(parent_hwnd, ex.GetErrorText(), ex.GetErrorCaption(), MB_OK | MB_ICONERROR);
+		ErrorMessage(parent_hwnd, ex.GetErrorText(), ex.GetErrorCaption());
 		return;
 	}
 
 	while (!terminated) {
 		ReadConsole(hStdIn, console_data, 4, &data_len, nullptr);
+
 		if ((data_len == 3) && (console_data[0] == 0x1b) && (console_data[1] == 0x4f) && (console_data[2] == 0x50)) { // F1 key
+#ifdef CONSOLE_ONLY
+            terminated = true;
+            break;
+#else
 			if (MessageBox(parent_hwnd, _T("Do you want to leave from this serial session?"), _T("SimpleCom"), MB_YESNO | MB_ICONQUESTION) == IDYES) {
-				terminated = true;
-				break;
+                terminated = true;
+                break;
 			}
 			else {
 				continue;
 			}
+#endif // CONSOLE_ONLY
 		}
+		else if (data_len == 1 && console_data[0] == 0x20){ /* SPACE key */
+		    pause = !pause;
+
+		    TString title = _T("SimpleCom: ") + Port;
+		    if (pause)
+                title += _T(" [PAUSE]");
+		    SetConsoleTitle(title.c_str());
+		}
+
+#if 0   /* close serial sending */
 		else {
 			// ReadConsole() is called as ANS mode (pInputControl is NULL)
-			for (int i = 0; i < data_len; i++) {
+			for (DWORD i = 0; i < data_len; i++) {
 				send_data[i] = console_data[i] & 0xff;
 			}
 		}
@@ -77,7 +108,7 @@ static void StdInRedirector(HWND parent_hwnd) {
 				}
 			}
 		}
-
+#endif
 	}
 
 	CloseHandle(overlapped.hEvent);
@@ -102,11 +133,10 @@ DWORD WINAPI StdOutRedirector(_In_ LPVOID lpParameter) {
 			}
 		}
 
-		if (nBytesRead > 0) {
+		if (nBytesRead > 0 && !pause) {
 			DWORD nBytesWritten;
 			WriteFile(hStdOut, &buf, nBytesRead, &nBytesWritten, NULL);
 		}
-
 	}
 
 	return 0;
@@ -146,18 +176,21 @@ int _tmain(int argc, LPCTSTR argv[])
 			// command line mode
 			setup.ParseArguments(argc, argv);
 		}
+#ifndef CONSOLE_ONLY
 		else if (!setup.ShowConfigureDialog(NULL, parent_hwnd)) {
 			return -1;
 		}
-		device = _T("\\\\.\\") + setup.GetPort();
+#endif
+        Port = setup.GetPort();
+		device = _T("\\\\.\\") + Port;
 		setup.SaveToDCB(&dcb);
 	}
-	catch (WinAPIException e) {
-		MessageBox(parent_hwnd, e.GetErrorText(), e.GetErrorCaption(), MB_OK | MB_ICONERROR);
+	catch (WinAPIException &e) {
+	    ErrorMessage(parent_hwnd, e.GetErrorText(), e.GetErrorCaption());
 		return -1;
 	}
-	catch (SerialSetupException e) {
-		MessageBox(parent_hwnd, e.GetErrorText(), e.GetErrorCaption(), MB_OK | MB_ICONERROR);
+	catch (SerialSetupException &e) {
+		ErrorMessage(parent_hwnd, e.GetErrorText(), e.GetErrorCaption());
 		return -2;
 	}
 
@@ -165,11 +198,13 @@ int _tmain(int argc, LPCTSTR argv[])
 	hSerial = CreateFile(device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
 	if (hSerial == INVALID_HANDLE_VALUE) {
 		WinAPIException e(GetLastError(), NULL); // Use WinAPIException to get error string.
-		MessageBox(parent_hwnd, e.GetErrorText(), _T("Open serial connection"), MB_OK | MB_ICONERROR);
+
+		TString error = _T("Open Serial ") + Port + _T(" Fail, Reason: ") + e.GetErrorText();
+		ErrorMessage(parent_hwnd, error.c_str(), _T("Open serial connection"));
 		return -4;
 	}
 
-	TString title = _T("SimpleCom: ") + device;
+	TString title = _T("SimpleCom: ") + Port;
 	SetConsoleTitle(title.c_str());
 
 	SetCommState(hSerial, &dcb);
@@ -180,7 +215,7 @@ int _tmain(int argc, LPCTSTR argv[])
 	serialReadOverlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	if (serialReadOverlapped.hEvent == NULL) {
 		WinAPIException ex(GetLastError(), _T("SimpleCom"));
-		MessageBox(parent_hwnd, ex.GetErrorText(), ex.GetErrorCaption(), MB_OK | MB_ICONERROR);
+		ErrorMessage(parent_hwnd, ex.GetErrorText(), ex.GetErrorCaption());
 		CloseHandle(hSerial);
 		return -1;
 	}
@@ -205,7 +240,7 @@ int _tmain(int argc, LPCTSTR argv[])
 	stdoutRedirectorThread = CreateThread(NULL, 0, &StdOutRedirector, NULL, 0, NULL);
 	if (stdoutRedirectorThread == NULL) {
 		WinAPIException ex(GetLastError(), _T("SimpleCom"));
-		MessageBox(parent_hwnd, ex.GetErrorText(), ex.GetErrorCaption(), MB_OK | MB_ICONERROR);
+		ErrorMessage(parent_hwnd, ex.GetErrorText(), ex.GetErrorCaption());
 		CloseHandle(hSerial);
 		return -2;
 	}
