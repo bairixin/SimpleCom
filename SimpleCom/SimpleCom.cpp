@@ -25,6 +25,9 @@
 #include "SerialSetup.h"
 #include "WinAPIException.h"
 
+
+#define RW_BUFFER_SIZE	2048
+
 static HANDLE stdoutRedirectorThread;
 
 static HANDLE hSerial;
@@ -47,6 +50,37 @@ static void ErrorMessage(HWND hwnd, LPCSTR lpText, LPCSTR lpCaption)
 #endif
 }
 
+static BOOL IsCharMatch(TCHAR *chars, int len, const char *value)
+{
+	int vlen = strlen(value);
+
+	if (len != vlen)
+		return FALSE;
+
+	for (int i = 0; i < len; i++)
+	{
+		if (chars[i] != value[i])
+			return FALSE;
+	}
+	return TRUE;
+}
+
+static int EscapeChar(TCHAR *chars, int len)
+{
+	const char *f1 = "OP";
+	const char *f8 = "[19~";
+
+	if (len < 2 || chars[0] != 0x1B)
+		return 0;
+
+	if (IsCharMatch(chars + 1, len - 1, f1))
+		return 1;
+	if (IsCharMatch(chars + 1, len - 1, f8))
+		return 8;
+
+	return 0;
+}
+
 /*
  * Entry point for stdin redirector.
  * stdin redirects stdin to serial (write op).
@@ -54,8 +88,8 @@ static void ErrorMessage(HWND hwnd, LPCSTR lpText, LPCSTR lpCaption)
 static void StdInRedirector(HWND parent_hwnd) {
 	HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
 	OVERLAPPED overlapped = { 0 };
-	TCHAR console_data[4];
-//	char send_data[4];
+	TCHAR console_data[RW_BUFFER_SIZE];
+	char send_data[RW_BUFFER_SIZE];
 	DWORD data_len;
 
 	overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -66,9 +100,9 @@ static void StdInRedirector(HWND parent_hwnd) {
 	}
 
 	while (!terminated) {
-		ReadConsole(hStdIn, console_data, 4, &data_len, nullptr);
+		ReadConsole(hStdIn, console_data, RW_BUFFER_SIZE, &data_len, nullptr);
 
-		if ((data_len == 3) && (console_data[0] == 0x1b) && (console_data[1] == 0x4f) && (console_data[2] == 0x50)) { // F1 key
+		if (EscapeChar(console_data, data_len) == 1) {	// F1 key
 #ifdef CONSOLE_ONLY
             terminated = true;
             break;
@@ -82,7 +116,7 @@ static void StdInRedirector(HWND parent_hwnd) {
 			}
 #endif // CONSOLE_ONLY
 		}
-		else if (data_len == 1 && console_data[0] == 0x20){ /* SPACE key */
+		else if (EscapeChar(console_data, data_len) == 8){ 	// F8 key
 		    pause = !pause;
 
 		    TString title = _T("SimpleCom: ") + Port;
@@ -90,8 +124,6 @@ static void StdInRedirector(HWND parent_hwnd) {
                 title += _T(" [PAUSE]");
 		    SetConsoleTitle(title.c_str());
 		}
-
-#if 0   /* close serial sending */
 		else {
 			// ReadConsole() is called as ANS mode (pInputControl is NULL)
 			for (DWORD i = 0; i < data_len; i++) {
@@ -99,16 +131,17 @@ static void StdInRedirector(HWND parent_hwnd) {
 			}
 		}
 
-		ResetEvent(overlapped.hEvent);
-		DWORD nBytesWritten;
-		if (!WriteFile(hSerial, send_data, data_len, &nBytesWritten, &overlapped)) {
-			if (GetLastError() == ERROR_IO_PENDING) {
-				if (!GetOverlappedResult(hSerial, &overlapped, &nBytesWritten, TRUE)) {
-					break;
+		if (!pause) {
+			ResetEvent(overlapped.hEvent);
+			DWORD nBytesWritten;
+			if (!WriteFile(hSerial, send_data, data_len, &nBytesWritten, &overlapped)) {
+				if (GetLastError() == ERROR_IO_PENDING) {
+					if (!GetOverlappedResult(hSerial, &overlapped, &nBytesWritten, TRUE)) {
+						break;
+					}
 				}
 			}
 		}
-#endif
 	}
 
 	CloseHandle(overlapped.hEvent);
